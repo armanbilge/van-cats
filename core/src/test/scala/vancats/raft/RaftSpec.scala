@@ -42,7 +42,7 @@ class RaftSpec extends Specification with CatsEffect {
         val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
         Random.scalaUtilRandom[IO].flatMap { implicit random =>
           for {
-            raft <- GrpcRaft[IO](id, peers, GrpcRaft.Config(50.millis, 100.millis, 0.5))
+            raft <- GrpcRaft[IO](id, peers, GrpcRaft.Config(500.milliseconds, 1.seconds, 0.5))
             _ <- deferred.complete(raft)
             switch <- Semaphore[IO](1)
             stream = raft
@@ -64,7 +64,7 @@ class RaftSpec extends Specification with CatsEffect {
         case (_, states) =>
           states
             .find { state =>
-              state.count(_.role.isLeader) == 1 && state.count(!_.role.isLeader) == 2
+              state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2
             }
             .compile
             .lastOrError
