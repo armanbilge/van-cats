@@ -202,9 +202,10 @@ private[raft] object Server {
               case RequestVote(
                     RequestVoteRequest(term, candidateId, nextLogIndex, lastLogTerm),
                     reply) =>
-                val grantVote = term >= currentTerm && votedFor.forall(_ == candidateId) && lastLogTerm >= log
-                  .lastOption
-                  .fold(currentTerm)(_.term) && nextLogIndex >= log.size
+                val grantVote =
+                  term >= currentTerm && votedFor.forall(_ == candidateId) && lastLogTerm >= log
+                    .lastOption
+                    .fold(currentTerm)(_.term) && nextLogIndex >= log.size
                 reply
                   .complete(RequestVoteReply(currentTerm, grantVote))
                   .as(state.copy(votedFor = if (grantVote) Some(candidateId) else votedFor))
@@ -227,40 +228,49 @@ private[raft] object Server {
                 }
 
               case AppendEntries(
-                    AppendEntriesRequest(term, leaderId, logIndex, prevLogTerm, entries, leaderCommit),
+                    AppendEntriesRequest(
+                      term,
+                      leaderId,
+                      logIndex,
+                      prevLogTerm,
+                      entries,
+                      leaderCommit),
                     reply) =>
                 for {
-                  _ <- if (term >= currentTerm)
-                    electionPacemaker.reset
-                  else
-                    Temporal[F].unit
+                  _ <-
+                    if (term >= currentTerm)
+                      electionPacemaker.reset
+                    else
+                      Temporal[F].unit
                   accept = term >= currentTerm &
                     logIndex <= log.size &
                     log.lift(logIndex - 1).forall(_.term == prevLogTerm)
                   _ <- reply.complete(AppendEntriesReply(currentTerm, accept))
-                  server <- if (accept) {
-                    val (unchanged, unverified) = log.splitAt(logIndex)
-                    val verified = unverified
-                      .lazyZip(entries)
-                      .map { (entry, shouldMatch) =>
-                        if (entry.term == shouldMatch.term)
-                          entry :: Nil
-                        else
-                          Nil
-                      }
-                      .takeWhile(_.nonEmpty)
-                      .flatten
-                    val updatedLog = unchanged ++ verified
-                    state.becomeFollower(Some(leaderId))
-                      .copy(
-                        commitIndex =
-                          if (leaderCommit > commitIndex) leaderCommit min updatedLog.size
-                          else commitIndex
-                      )
-                      .commit(commit)
-                  } else if (term >= currentTerm)
-                    state.becomeFollower(Some(leaderId)).pure
-                  else state.pure
+                  server <-
+                    if (accept) {
+                      val (unchanged, unverified) = log.splitAt(logIndex)
+                      val verified = unverified
+                        .lazyZip(entries)
+                        .map { (entry, shouldMatch) =>
+                          if (entry.term == shouldMatch.term)
+                            entry :: Nil
+                          else
+                            Nil
+                        }
+                        .takeWhile(_.nonEmpty)
+                        .flatten
+                      val updatedLog = unchanged ++ verified
+                      state
+                        .becomeFollower(Some(leaderId))
+                        .copy(
+                          commitIndex =
+                            if (leaderCommit > commitIndex) leaderCommit min updatedLog.size
+                            else commitIndex
+                        )
+                        .commit(commit)
+                    } else if (term >= currentTerm)
+                      state.becomeFollower(Some(leaderId)).pure
+                    else state.pure
                 } yield server
 
               case ProcessAppendEntriesReply(
