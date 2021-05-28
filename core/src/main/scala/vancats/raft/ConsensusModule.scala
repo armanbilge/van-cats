@@ -36,7 +36,7 @@ sealed abstract private[raft] class ConsensusModule[F[_]] {
   def state: Stream[F, State[F]]
 }
 
-private object ConsensusModule {
+private[raft] object ConsensusModule {
 
   import Role.{Candidate, Follower, Leader}
 
