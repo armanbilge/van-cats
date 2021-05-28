@@ -13,13 +13,8 @@ option (scalapb.options) = {
 
 service Raft {
   rpc RequestVote (RequestVoteRequest) returns (RequestVoteReply) {}
-  rpc RequestVoteStream (stream RequestVoteRequest) returns (stream RequestVoteReply) {}
-
   rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesReply) {}
-  rpc AppendEntriesStream (stream AppendEntriesRequest) returns (stream AppendEntriesReply) {}
-
   rpc ServiceClient (ServiceClientRequest) returns (google.protobuf.Empty) {}
-  rpc ServiceClientStream (stream ServiceClientRequest) returns (stream google.protobuf.Empty) {}
 }
 
 message RequestVoteRequest {

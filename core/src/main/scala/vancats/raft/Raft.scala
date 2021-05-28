@@ -16,10 +16,10 @@
 
 package vancats.raft
 
-import cats.Monad
 import cats.effect.std.Random
-import cats.effect.{Deferred, Temporal}
+import cats.effect.{Deferred, Ref, Temporal}
 import cats.syntax.all._
+import cats.{Monad, MonadThrow}
 import com.google.protobuf.ByteString
 import com.google.protobuf.empty.Empty
 import fs2.concurrent.Channel
@@ -79,11 +79,6 @@ object GrpcRaft {
         server.command1(RequestVote(request, reply)) *> reply.get
       }
 
-    override def requestVoteStream(
-        request: Stream[F, RequestVoteRequest],
-        ctx: Metadata): Stream[F, RequestVoteReply] =
-      request.evalMap(requestVote(_, ctx))
-
     override def appendEntries(
         request: AppendEntriesRequest,
         ctx: Metadata): F[AppendEntriesReply] =
@@ -91,18 +86,8 @@ object GrpcRaft {
         server.command1(AppendEntries(request, reply)) *> reply.get
       }
 
-    override def appendEntriesStream(
-        request: Stream[F, AppendEntriesRequest],
-        ctx: Metadata): Stream[F, AppendEntriesReply] =
-      request.evalMap(appendEntries(_, ctx))
-
     override def serviceClient(request: ServiceClientRequest, ctx: Metadata): F[Empty] =
       server.command1(ServiceClient(request.command)) *> Empty().pure
-
-    override def serviceClientStream(
-        request: Stream[F, ServiceClientRequest],
-        ctx: Metadata): Stream[F, Empty] =
-      request.evalMap(serviceClient(_, ctx))
 
   }
 
@@ -125,27 +110,50 @@ object GrpcRaft {
           ctx: Metadata): F[RequestVoteReply] =
         underlying.get.flatMap(_.requestVote(request, ctx))
 
-      override def requestVoteStream(
-          request: Stream[F, RequestVoteRequest],
-          ctx: Metadata): Stream[F, RequestVoteReply] =
-        Stream.eval(underlying.get).flatMap(_.requestVoteStream(request, ctx))
-
       override def appendEntries(
           request: AppendEntriesRequest,
           ctx: Metadata): F[AppendEntriesReply] =
         underlying.get.flatMap(_.appendEntries(request, ctx))
 
-      override def appendEntriesStream(
-          request: Stream[F, AppendEntriesRequest],
-          ctx: Metadata): Stream[F, AppendEntriesReply] =
-        Stream.eval(underlying.get).flatMap(_.appendEntriesStream(request, ctx))
-
       override def serviceClient(request: ServiceClientRequest, ctx: Metadata): F[Empty] =
         underlying.get.flatMap(_.serviceClient(request, ctx))
-
-      override def serviceClientStream(
-          request: Stream[F, ServiceClientRequest],
-          ctx: Metadata): Stream[F, Empty] =
-        Stream.eval(underlying.get).flatMap(_.serviceClientStream(request, ctx))
     }
+
+  private[raft] def flaky[F[_]: MonadThrow](
+      underlying: GrpcRaft[F],
+      connected: Ref[F, Boolean]): GrpcRaft[F] =
+    new GrpcRaft[F] {
+      override def command: Pipe[F, ByteString, Nothing] =
+        underlying.command
+
+      override def command1(c: ByteString): F[Unit] =
+        underlying.command1(c)
+
+      override def commit: Stream[F, ByteString] =
+        underlying.commit
+
+      override def state: Stream[F, State[F]] =
+        underlying.state
+
+      private def ifResponsive[A](fa: F[A]): F[A] =
+        connected.get.flatMap {
+          if (_) fa
+          else
+            MonadThrow[F].raiseError(new IllegalStateException(s"$underlying is disconnected"))
+        }
+
+      override def requestVote(
+          request: RequestVoteRequest,
+          ctx: Metadata): F[RequestVoteReply] =
+        ifResponsive(underlying.requestVote(request, ctx))
+
+      override def appendEntries(
+          request: AppendEntriesRequest,
+          ctx: Metadata): F[AppendEntriesReply] =
+        ifResponsive(underlying.appendEntries(request, ctx))
+
+      override def serviceClient(request: ServiceClientRequest, ctx: Metadata): F[Empty] =
+        ifResponsive(underlying.serviceClient(request, ctx))
+    }
+
 }

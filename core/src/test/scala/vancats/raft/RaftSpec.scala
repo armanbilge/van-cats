@@ -16,7 +16,7 @@
 
 package vancats.raft
 
-import cats.effect.std.{Random, Semaphore}
+import cats.effect.std.Random
 import cats.effect.testing.specs2.CatsEffect
 import cats.effect.{Deferred, IO}
 import cats.syntax.all._
@@ -24,19 +24,37 @@ import fs2.Stream
 import fs2.concurrent.SignallingRef
 import org.specs2.mutable.Specification
 import vancats.raft.ConsensusModule.State
-import vancats.raft.RaftSpec.TestRaft
+import vancats.raft.RaftSpec._
 
 import scala.concurrent.duration._
 
 object RaftSpec {
-  final case class TestRaft(raft: GrpcRaft[IO], freeze: IO[Unit], unfreeze: IO[Unit])
+  final case class TestRaft(
+      raft: GrpcRaft[IO],
+      connected: IO[Boolean],
+      connect: IO[Unit],
+      disconnect: IO[Unit])
+
+  sealed abstract class Status
+  final case object Target extends Status
+  final case class Reign(epoch: Int, leader: Int, term: Int) extends Status
+
+  final case class ClusterState(members: Map[Int, State[IO]]) {
+
+    def soleLeaderId: Option[Int] =
+      Option.when(members.values.count(_.role.isLeader) == 1)(
+        members.find(_._2.role.isLeader).get._1)
+
+    def hasNoLeader: Boolean = members.values.count(_.role.isLeader) == 0
+
+  }
 }
 
 class RaftSpec extends Specification with CatsEffect {
 
   override val Timeout: FiniteDuration = 10.seconds
 
-  def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, Seq[State[IO]]])] =
+  def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, ClusterState])] =
     for {
       deferredServers <- Vector.fill(size)(Deferred[IO, GrpcRaft[IO]]).sequence
       servers = deferredServers.map(GrpcRaft.deferred[IO])
@@ -45,60 +63,56 @@ class RaftSpec extends Specification with CatsEffect {
         val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
         Random.scalaUtilRandom[IO].flatMap { implicit random =>
           for {
-            raft <- GrpcRaft[IO](id, peers, GrpcRaft.Config(100.milliseconds, 1.seconds, 0.5))
-            _ <- deferred.complete(raft)
-            switch <- Semaphore[IO](1)
+            connected <- IO.ref(true)
+            raft <- GrpcRaft[IO](
+              id,
+              peers.view.mapValues(GrpcRaft.flaky(_, connected)).toMap,
+              GrpcRaft.Config(100.milliseconds, 1.seconds, 0.5))
+            _ <- deferred.complete(GrpcRaft.flaky(raft, connected))
             stream = raft
               .state
-              .evalTap(_ => switch.permit.use(_ => IO.unit))
-              .foreach(s => signal.update(_.updated(id, s)))
+              .foreach { s =>
+                connected.get.flatMap {
+                  if (_)
+                    signal.update(_.updated(id, s))
+                  else
+                    signal.update(_.removed(id))
+                }
+              }
               .drain
-          } yield (TestRaft(raft, switch.acquire, switch.release), stream)
+          } yield (
+            TestRaft(raft, connected.get, connected.set(true), connected.set(false)),
+            stream)
         }
       }
       testRafts = rafts.map(_._1)
-      stream = rafts.foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2)).collect {
-        case state if state.size == size => Seq.tabulate(3)(state)
-      }
+      stream = rafts
+        .foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2))
+        .map(ClusterState)
     } yield (testRafts, stream)
 
   "GrpcRaft" should {
 
     "elect a single leader" in createCluster(3).flatMap {
       case (_, states) =>
-        states
-          .find { state =>
-            state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2
-          }
-          .compile
-          .lastOrError
-          .as(success)
-          .timeout(Timeout)
+        states.find(_.soleLeaderId.isDefined).compile.lastOrError.as(success).timeout(Timeout)
     }
 
     "elect a new leader" in createCluster(3).flatMap {
       case (rafts, states) =>
-        sealed abstract class Status
-        case object Initial extends Status
-        case class FirstLegitTerm(term: Int) extends Status
-        case object SecondLegitTerm extends Status
-
         states
-          .evalScan(Initial: Status) {
-            case (Initial, state)
-                if state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2 =>
-              val leaderId = state.indexWhere(_.role.isLeader)
-              rafts(leaderId)
-                .freeze
-                .as(FirstLegitTerm(state.find(_.role.isLeader).get.currentTerm))
-            case (FirstLegitTerm(prevTerm), state) if {
-                  val alive = state.filter(_.currentTerm > prevTerm)
-                  alive.count(_.role.isLeader) == 1 && alive.count(_.role.isFollower) == 1
+          .evalScan(List.empty[Status]) {
+            case (Nil, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              val leader = cluster.members(leaderId)
+              rafts(leaderId).disconnect.as(Reign(0, leaderId, leader.currentTerm) :: Nil)
+            case (Reign(0, prevLeader, prevTerm) :: _, cluster) if cluster.soleLeaderId.exists {
+                  id => id != prevLeader && cluster.members(id).currentTerm > prevTerm
                 } =>
-              IO.pure(SecondLegitTerm)
+              IO.pure(Target :: Nil)
             case (status, _) => IO.pure(status)
           }
-          .collectFirst { case SecondLegitTerm => SecondLegitTerm }
+          .collectFirst { case Target :: _ => () }
           .compile
           .lastOrError
           .as(success)
