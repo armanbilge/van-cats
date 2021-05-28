@@ -61,46 +61,43 @@ class RaftSpec extends Specification with CatsEffect {
 
   "GrpcRaft" should {
 
-    "elect a single leader" in {
-      createCluster(3).flatMap {
-        case (_, states) =>
-          states
-            .find { state =>
-              state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2
-            }
-            .compile
-            .lastOrError
-            .as(success)
-            .timeout(Timeout)
-      }
-    }
-
-    "elect a new leader" in {
-      for {
-        (rafts, states) <- createCluster(3)
-        firstLeader <- Deferred[IO, (Int, Int)]
-        _ <- firstLeader.get.flatMap(l => rafts(l._1).freeze).start
-        success <- states
-          .evalTap { state =>
-            if (state.count(_.role.isLeader) == 1) {
-              val leader = state.indexWhere(_.role.isLeader)
-              val term = state(leader).currentTerm
-              firstLeader.complete((leader, term))
-            } else IO.unit
-          }
-          .prefetchN(Int.MaxValue)
-          .zip(Stream.repeatEval(firstLeader.get))
-          .find {
-            case (state, (_, prevTerm)) =>
-              val alive = state.filter(_.currentTerm > prevTerm)
-              alive.count(_.role.isLeader) == 1 & alive.count(_.role.isFollower) == 1
-            case _ => false
+    "elect a single leader" in createCluster(3).flatMap {
+      case (_, states) =>
+        states
+          .find { state =>
+            state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2
           }
           .compile
           .lastOrError
           .as(success)
           .timeout(Timeout)
-      } yield success
+    }
+
+    "elect a new leader" in createCluster(3).flatMap {
+      case (rafts, states) =>
+        for {
+          firstLeader <- Deferred[IO, (Int, Int)]
+          _ <- firstLeader.get.flatMap(l => rafts(l._1).freeze).start
+          success <- states
+            .evalTap { state =>
+              if (state.count(_.role.isLeader) == 1) {
+                val leader = state.indexWhere(_.role.isLeader)
+                val term = state(leader).currentTerm
+                firstLeader.complete((leader, term))
+              } else IO.unit
+            }
+            .prefetchN(Int.MaxValue)
+            .zip(Stream.repeatEval(firstLeader.get))
+            .find {
+              case (state, (_, prevTerm)) =>
+                val alive = state.filter(_.currentTerm > prevTerm)
+                alive.count(_.role.isLeader) == 1 & alive.count(_.role.isFollower) == 1
+            }
+            .compile
+            .lastOrError
+            .as(success)
+            .timeout(Timeout)
+        } yield success
     }
   }
 
