@@ -184,169 +184,166 @@ private[raft] object Server {
       scheduleHeartBeat = (term: Int) =>
         channel.send(BeatHeart(term)).delayBy(heartRate).start.void
       _ <- scheduleElectionTimeout(0)
-      fsm = channel
-        .stream
-        .evalScan(State()) { (server, command) =>
-          server.updateTerm(command, scheduleElectionTimeout).flatMap {
-            case state @ State(role, currentTerm, votedFor, log, commitIndex, _) =>
-              def sendAppendEntries(peerId: Int, peer: RaftFs2Grpc[F, Metadata], nextIndex: Int)
-                  : F[Unit] =
-                peer
-                  .appendEntries(
-                    AppendEntriesRequest(
-                      currentTerm,
-                      id,
-                      nextIndex,
-                      log.lastOption.fold(currentTerm)(_.term),
-                      log.drop(nextIndex),
-                      commitIndex
-                    ),
-                    new Metadata)
-                  .flatMap(reply =>
-                    channel.send(ProcessAppendEntriesReply(peerId, log.size, reply)))
-                  .start
-                  .void
+      fsm = channel.stream.evalScan(State()) { (server, command) =>
+        server.updateTerm(command, scheduleElectionTimeout).flatMap {
+          case state @ State(role, currentTerm, votedFor, log, commitIndex, _) =>
+            def sendAppendEntries(peerId: Int, peer: RaftFs2Grpc[F, Metadata], nextIndex: Int)
+                : F[Unit] =
+              peer
+                .appendEntries(
+                  AppendEntriesRequest(
+                    currentTerm,
+                    id,
+                    nextIndex,
+                    log.lastOption.fold(currentTerm)(_.term),
+                    log.drop(nextIndex),
+                    commitIndex
+                  ),
+                  new Metadata)
+                .flatMap(reply =>
+                  channel.send(ProcessAppendEntriesReply(peerId, log.size, reply)))
+                .start
+                .void
 
-              command match {
-                case ServiceClient(command) =>
-                  role match {
-                    case Leader(_, _) =>
-                      state.copy(log = log :+ LogEntry(currentTerm, command)).pure
-                    case Follower(Some(leaderId), _) =>
-                      peers(leaderId)
-                        .serviceClient(ServiceClientRequest(command), new Metadata)
-                        .start
-                        .as(state)
-                    case _ =>
-                      channel.send(ServiceClient(command)).delayBy(heartRate).start.as(state)
-                  }
+            command match {
+              case ServiceClient(command) =>
+                role match {
+                  case Leader(_, _) =>
+                    state.copy(log = log :+ LogEntry(currentTerm, command)).pure
+                  case Follower(Some(leaderId), _) =>
+                    peers(leaderId)
+                      .serviceClient(ServiceClientRequest(command), new Metadata)
+                      .start
+                      .as(state)
+                  case _ =>
+                    channel.send(ServiceClient(command)).delayBy(heartRate).start.as(state)
+                }
 
-                case RequestVote(
-                      RequestVoteRequest(term, candidateId, nextLogIndex, lastLogTerm),
-                      reply) =>
-                  val grantVote =
-                    term >= currentTerm && votedFor.forall(
-                      _ == candidateId) && lastLogTerm >= log
-                      .lastOption
-                      .fold(currentTerm)(_.term) && nextLogIndex >= log.size
-                  reply
-                    .complete(RequestVoteReply(currentTerm, grantVote))
-                    .as(state.copy(votedFor = if (grantVote) Some(candidateId) else votedFor))
+              case RequestVote(
+                    RequestVoteRequest(term, candidateId, nextLogIndex, lastLogTerm),
+                    reply) =>
+                val grantVote =
+                  term >= currentTerm && votedFor.forall(_ == candidateId) && lastLogTerm >= log
+                    .lastOption
+                    .fold(currentTerm)(_.term) && nextLogIndex >= log.size
+                reply
+                  .complete(RequestVoteReply(currentTerm, grantVote))
+                  .as(state.copy(votedFor = if (grantVote) Some(candidateId) else votedFor))
 
-                case CastBallot(RequestVoteReply(_, voteGranted)) =>
-                  role match {
-                    case Candidate(votes, _) if voteGranted && votes + 1 > serverCount / 2 =>
-                      scheduleHeartBeat(currentTerm).as(
-                        state.copy(
-                          role = Leader(
-                            Map.empty.withDefaultValue(log.size),
-                            Map.empty.withDefaultValue(0)
-                          )
-                        ))
-                    case Candidate(votes, timeoutId) if voteGranted =>
-                      state.copy(role = Candidate(votes + 1, timeoutId)).pure
-                    case _ =>
-                      state.pure
-                  }
-
-                case AppendEntries(
-                      AppendEntriesRequest(
-                        term,
-                        leaderId,
-                        logIndex,
-                        prevLogTerm,
-                        entries,
-                        leaderCommit),
-                      reply) =>
-                  val accept = term >= currentTerm &
-                    logIndex <= log.size &
-                    log.lift(logIndex - 1).forall(_.term == prevLogTerm)
-                  for {
-                    _ <- reply.complete(AppendEntriesReply(currentTerm, accept))
-                    server <-
-                      if (accept) {
-                        val (unchanged, unverified) = log.splitAt(logIndex)
-                        val verified = unverified
-                          .lazyZip(entries)
-                          .map { (entry, shouldMatch) =>
-                            if (entry.term == shouldMatch.term)
-                              entry :: Nil
-                            else
-                              Nil
-                          }
-                          .takeWhile(_.nonEmpty)
-                          .flatten
-                        val updatedLog = unchanged ++ verified
-                        for {
-                          follower <- state
-                            .becomeFollower(Some(leaderId), scheduleElectionTimeout)
-                          committed <- follower
-                            .copy(commitIndex =
-                              if (leaderCommit > commitIndex) leaderCommit min updatedLog.size
-                              else commitIndex)
-                            .commit(commit)
-                        } yield committed
-                      } else if (term >= currentTerm)
-                        state.becomeFollower(Some(leaderId), scheduleElectionTimeout)
-                      else state.pure
-                  } yield server
-
-                case ProcessAppendEntriesReply(
-                      peerId,
-                      targetNextIndex,
-                      AppendEntriesReply(_, success)) =>
-                  role match {
-                    case Leader(nextIndex, matchIndex) if success =>
-                      state
-                        .copy(role = Leader(
-                          nextIndex.updated(peerId, targetNextIndex),
-                          matchIndex.updated(peerId, targetNextIndex)))
-                        .tryIncrementCommitIndex(serverCount)
-                        .commit(commit)
-                    case Leader(nextIndex, matchIndex) if !success =>
-                      sendAppendEntries(peerId, peers(peerId), nextIndex(peerId) - 1) as
-                        state.copy(role =
-                          Leader(nextIndex.updatedWith(peerId)(_.map(_ - 1)), matchIndex))
-                    case _ => state.pure
-                  }
-
-                case BeatHeart(forTerm) =>
-                  role match {
-                    case Leader(nextIndex, _) if forTerm == currentTerm =>
-                      scheduleHeartBeat(currentTerm) *>
-                        peers.toList.traverse {
-                          case (peerId, peer) =>
-                            sendAppendEntries(peerId, peer, nextIndex(peerId))
-                        } as state
-                    case _ => state.pure
-                  }
-
-                case StartElection(timeoutId) =>
-                  role.timeoutId match {
-                    case Some(expectedId) if timeoutId == expectedId =>
-                      scheduleElectionTimeout(id + 1) *>
-                        peers.values.toList.traverse { peer =>
-                          peer
-                            .requestVote(
-                              RequestVoteRequest(
-                                currentTerm + 1,
-                                id,
-                                log.size,
-                                log.lastOption.fold(currentTerm + 1)(_.term)),
-                              new Metadata())
-                            .flatMap(reply => channel.send(CastBallot(reply)))
-                            .start
-                        } as state.copy(
-                          role = Candidate(_timeoutId = timeoutId + 1),
-                          currentTerm = currentTerm + 1,
-                          votedFor = Some(id)
+              case CastBallot(RequestVoteReply(_, voteGranted)) =>
+                role match {
+                  case Candidate(votes, _) if voteGranted && votes + 1 > serverCount / 2 =>
+                    scheduleHeartBeat(currentTerm).as(
+                      state.copy(
+                        role = Leader(
+                          Map.empty.withDefaultValue(log.size),
+                          Map.empty.withDefaultValue(0)
                         )
-                    case _ => state.pure
-                  }
+                      ))
+                  case Candidate(votes, timeoutId) if voteGranted =>
+                    state.copy(role = Candidate(votes + 1, timeoutId)).pure
+                  case _ =>
+                    state.pure
+                }
 
-              }
-          }
+              case AppendEntries(
+                    AppendEntriesRequest(
+                      term,
+                      leaderId,
+                      logIndex,
+                      prevLogTerm,
+                      entries,
+                      leaderCommit),
+                    reply) =>
+                val accept = term >= currentTerm &
+                  logIndex <= log.size &
+                  log.lift(logIndex - 1).forall(_.term == prevLogTerm)
+                for {
+                  _ <- reply.complete(AppendEntriesReply(currentTerm, accept))
+                  server <-
+                    if (accept) {
+                      val (unchanged, unverified) = log.splitAt(logIndex)
+                      val verified = unverified
+                        .lazyZip(entries)
+                        .map { (entry, shouldMatch) =>
+                          if (entry.term == shouldMatch.term)
+                            entry :: Nil
+                          else
+                            Nil
+                        }
+                        .takeWhile(_.nonEmpty)
+                        .flatten
+                      val updatedLog = unchanged ++ verified
+                      for {
+                        follower <- state
+                          .becomeFollower(Some(leaderId), scheduleElectionTimeout)
+                        committed <- follower
+                          .copy(commitIndex =
+                            if (leaderCommit > commitIndex) leaderCommit min updatedLog.size
+                            else commitIndex)
+                          .commit(commit)
+                      } yield committed
+                    } else if (term >= currentTerm)
+                      state.becomeFollower(Some(leaderId), scheduleElectionTimeout)
+                    else state.pure
+                } yield server
+
+              case ProcessAppendEntriesReply(
+                    peerId,
+                    targetNextIndex,
+                    AppendEntriesReply(_, success)) =>
+                role match {
+                  case Leader(nextIndex, matchIndex) if success =>
+                    state
+                      .copy(role = Leader(
+                        nextIndex.updated(peerId, targetNextIndex),
+                        matchIndex.updated(peerId, targetNextIndex)))
+                      .tryIncrementCommitIndex(serverCount)
+                      .commit(commit)
+                  case Leader(nextIndex, matchIndex) if !success =>
+                    sendAppendEntries(peerId, peers(peerId), nextIndex(peerId) - 1) as
+                      state.copy(role =
+                        Leader(nextIndex.updatedWith(peerId)(_.map(_ - 1)), matchIndex))
+                  case _ => state.pure
+                }
+
+              case BeatHeart(forTerm) =>
+                role match {
+                  case Leader(nextIndex, _) if forTerm == currentTerm =>
+                    scheduleHeartBeat(currentTerm) *>
+                      peers.toList.traverse {
+                        case (peerId, peer) =>
+                          sendAppendEntries(peerId, peer, nextIndex(peerId))
+                      } as state
+                  case _ => state.pure
+                }
+
+              case StartElection(timeoutId) =>
+                role.timeoutId match {
+                  case Some(expectedId) if timeoutId == expectedId =>
+                    scheduleElectionTimeout(id + 1) *>
+                      peers.values.toList.traverse { peer =>
+                        peer
+                          .requestVote(
+                            RequestVoteRequest(
+                              currentTerm + 1,
+                              id,
+                              log.size,
+                              log.lastOption.fold(currentTerm + 1)(_.term)),
+                            new Metadata())
+                          .flatMap(reply => channel.send(CastBallot(reply)))
+                          .start
+                      } as state.copy(
+                        role = Candidate(_timeoutId = timeoutId + 1),
+                        currentTerm = currentTerm + 1,
+                        votedFor = Some(id)
+                      )
+                  case _ => state.pure
+                }
+
+            }
         }
+      }
 
     } yield new Server[F] {
       override def command: Pipe[F, Command[F], Nothing] =
