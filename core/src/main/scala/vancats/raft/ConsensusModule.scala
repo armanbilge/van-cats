@@ -64,7 +64,8 @@ private object ConsensusModule {
         scheduleElection: Int => F[F[Unit]])(implicit F: Concurrent[F]): F[State[F]] =
       command.term match {
         case Some(term) if term > currentTerm =>
-          copy(currentTerm = term, votedFor = None).becomeFollower(command.leaderId, scheduleElection)
+          copy(currentTerm = term, votedFor = None)
+            .becomeFollower(command.leaderId, scheduleElection)
         case _ => (this: State[F]).pure
       }
 

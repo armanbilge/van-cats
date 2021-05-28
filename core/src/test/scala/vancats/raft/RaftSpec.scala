@@ -78,29 +78,31 @@ class RaftSpec extends Specification with CatsEffect {
 
     "elect a new leader" in createCluster(3).flatMap {
       case (rafts, states) =>
-        for {
-          firstLeader <- Deferred[IO, (Int, Int)]
-          _ <- firstLeader.get.flatMap(l => rafts(l._1).freeze).start
-          success <- states
-            .evalTap { state =>
-              if (state.count(_.role.isLeader) == 1) {
-                val leader = state.indexWhere(_.role.isLeader)
-                val term = state(leader).currentTerm
-                firstLeader.complete((leader, term))
-              } else IO.unit
-            }
-            .prefetchN(Int.MaxValue)
-            .zip(Stream.repeatEval(firstLeader.get))
-            .find {
-              case (state, (_, prevTerm)) =>
-                val alive = state.filter(_.currentTerm > prevTerm)
-                alive.count(_.role.isLeader) == 1 & alive.count(_.role.isFollower) == 1
-            }
-            .compile
-            .lastOrError
-            .as(success)
-            .timeout(Timeout)
-        } yield success
+        sealed abstract class Status
+        case object Initial extends Status
+        case class FirstLegitTerm(term: Int) extends Status
+        case object SecondLegitTerm extends Status
+
+        states
+          .evalScan(Initial: Status) {
+            case (Initial, state)
+                if state.count(_.role.isLeader) == 1 && state.count(_.role.isFollower) == 2 =>
+              val leaderId = state.indexWhere(_.role.isLeader)
+              rafts(leaderId)
+                .freeze
+                .as(FirstLegitTerm(state.find(_.role.isLeader).get.currentTerm))
+            case (FirstLegitTerm(prevTerm), state) if {
+                  val alive = state.filter(_.currentTerm > prevTerm)
+                  alive.count(_.role.isLeader) == 1 && alive.count(_.role.isFollower) == 1
+                } =>
+              IO.pure(SecondLegitTerm)
+            case (status, _) => IO.pure(status)
+          }
+          .collectFirst { case SecondLegitTerm => SecondLegitTerm }
+          .compile
+          .lastOrError
+          .as(success)
+          .timeout(Timeout)
     }
   }
 
