@@ -23,6 +23,7 @@ import cats.syntax.all._
 import fs2.Stream
 import fs2.concurrent.SignallingRef
 import org.specs2.mutable.Specification
+import vancats.raft.ConsensusModule.State
 import vancats.raft.RaftSpec.TestRaft
 
 import scala.concurrent.duration._
@@ -35,11 +36,11 @@ class RaftSpec extends Specification with CatsEffect {
 
   override val Timeout: FiniteDuration = 10.seconds
 
-  def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, Seq[State]])] =
+  def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, Seq[State[IO]]])] =
     for {
       deferredServers <- Vector.fill(size)(Deferred[IO, GrpcRaft[IO]]).sequence
       servers = deferredServers.map(GrpcRaft.deferred[IO])
-      signal <- SignallingRef[IO, Seq[State]](Seq.fill(3)(State()))
+      signal <- SignallingRef[IO, Map[Int, State[IO]]](Map.empty)
       rafts <- deferredServers.traverseWithIndexM { (deferred, id) =>
         val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
         Random.scalaUtilRandom[IO].flatMap { implicit random =>
@@ -56,7 +57,9 @@ class RaftSpec extends Specification with CatsEffect {
         }
       }
       testRafts = rafts.map(_._1)
-      stream = rafts.foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2))
+      stream = rafts.foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2)).collect {
+        case state if state.size == size => Seq.tabulate(3)(state)
+      }
     } yield (testRafts, stream)
 
   "GrpcRaft" should {

@@ -25,7 +25,7 @@ import com.google.protobuf.empty.Empty
 import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import io.grpc.Metadata
-import vancats.raft.Server.{AppendEntries, RequestVote, ServiceClient}
+import vancats.raft.ConsensusModule.{AppendEntries, RequestVote, ServiceClient, State}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -33,7 +33,7 @@ sealed abstract class Raft[F[_], C] {
   def command: Pipe[F, C, Nothing]
   def command1(c: C): F[Unit]
   def commit: Stream[F, C]
-  def state: Stream[F, State]
+  def state: Stream[F, State[F]]
 }
 
 sealed abstract class GrpcRaft[F[_]] extends Raft[F, ByteString] with RaftFs2Grpc[F, Metadata]
@@ -51,7 +51,7 @@ object GrpcRaft {
       peers: Map[Int, RaftFs2Grpc[F, Metadata]],
       config: Config): F[GrpcRaft[F]] = for {
     commitChannel <- Channel.unbounded[F, ByteString]
-    server <- Server(
+    server <- ConsensusModule(
       id,
       peers.size + 1,
       config.heartRate,
@@ -71,7 +71,7 @@ object GrpcRaft {
     override def commit: Stream[F, ByteString] =
       commitChannel.stream
 
-    override def state: Stream[F, State] =
+    override def state: Stream[F, State[F]] =
       server.state
 
     override def requestVote(request: RequestVoteRequest, ctx: Metadata): F[RequestVoteReply] =
@@ -117,7 +117,7 @@ object GrpcRaft {
       override def commit: Stream[F, ByteString] =
         Stream.eval(underlying.get).flatMap(_.commit)
 
-      override def state: Stream[F, State] =
+      override def state: Stream[F, State[F]] =
         Stream.eval(underlying.get).flatMap(_.state)
 
       override def requestVote(
