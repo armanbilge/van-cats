@@ -40,7 +40,7 @@ private[raft] object ConsensusModule {
 
   import Role.{Candidate, Follower, Leader}
 
-  final case class State[F[_]] private[ConsensusModule] (
+  final case class State[F[_]] private[raft] (
       role: Role[F],
       currentTerm: Int = 0,
       votedFor: Option[Int] = None,
@@ -49,7 +49,7 @@ private[raft] object ConsensusModule {
       lastApplied: Int = 0 // All entries strictly below this index have been applied
   ) {
 
-    private[ConsensusModule] def becomeFollower(
+    private[raft] def becomeFollower(
         leaderId: Option[Int],
         scheduleElection: Int => F[F[Unit]])(implicit F: Concurrent[F]): F[State[F]] = for {
       id <- role.nextElectionOption.fold(0.pure) {
@@ -59,9 +59,8 @@ private[raft] object ConsensusModule {
       cancel <- scheduleElection(id)
     } yield copy(role = Follower(leaderId, NextElection(id, cancel)))
 
-    private[ConsensusModule] def updateTerm(
-        command: Command[F],
-        scheduleElection: Int => F[F[Unit]])(implicit F: Concurrent[F]): F[State[F]] =
+    private[raft] def updateTerm(command: Command[F], scheduleElection: Int => F[F[Unit]])(
+        implicit F: Concurrent[F]): F[State[F]] =
       command.term match {
         case Some(term) if term > currentTerm =>
           copy(currentTerm = term, votedFor = None)
@@ -69,7 +68,7 @@ private[raft] object ConsensusModule {
         case _ => (this: State[F]).pure
       }
 
-    private[ConsensusModule] def tryIncrementCommitIndex(serverCount: Int): State[F] =
+    private[raft] def tryIncrementCommitIndex(serverCount: Int): State[F] =
       role match {
         case Leader(_, matchIndex) =>
           @tailrec def loop(N: Int): Option[Int] =
@@ -86,7 +85,7 @@ private[raft] object ConsensusModule {
         case _ => this
       }
 
-    private[ConsensusModule] def commit(commit: Pipe[F, ByteString, Nothing])(
+    private[raft] def commit(commit: Pipe[F, ByteString, Nothing])(
         implicit F: Concurrent[F]): F[State[F]] =
       if (commitIndex > lastApplied)
         Stream
@@ -105,9 +104,9 @@ private[raft] object ConsensusModule {
   sealed abstract class Role[F[_]] {
     def isFollower = false
     def isLeader = false
-    private[ConsensusModule] def nextElectionOption: Option[NextElection[F]] = None
+    private[raft] def nextElectionOption: Option[NextElection[F]] = None
   }
-  private[ConsensusModule] object Role {
+  private[raft] object Role {
 
     final case class Follower[F[_]](leader: Option[Int] = None, nextElection: NextElection[F])
         extends Role[F] {
@@ -131,7 +130,7 @@ private[raft] object ConsensusModule {
     }
   }
 
-  final private case class NextElection[F[_]](id: Int, cancel: F[Unit])
+  final private[raft] case class NextElection[F[_]](id: Int, cancel: F[Unit])
 
   sealed abstract private[raft] class Command[F[_]] {
     def term: Option[Int] = None

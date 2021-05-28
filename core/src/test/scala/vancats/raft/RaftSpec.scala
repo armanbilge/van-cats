@@ -22,7 +22,10 @@ import cats.effect.{Deferred, IO}
 import cats.syntax.all._
 import fs2.Stream
 import fs2.concurrent.SignallingRef
+import org.specs2.execute.Result
 import org.specs2.mutable.Specification
+import org.specs2.specification.core.{AsExecution, Execution, Fragments}
+import vancats.raft.ConsensusModule.Role.{Follower, Leader}
 import vancats.raft.ConsensusModule.State
 import vancats.raft.RaftSpec._
 
@@ -36,17 +39,25 @@ object RaftSpec {
       disconnect: IO[Unit])
 
   sealed abstract class Status
-  final case object Target extends Status
+  case object Initial extends Status
+  case object Target extends Status
+  final case class Epoch(epoch: Int) extends Status
   final case class Reign(epoch: Int, leader: Int, term: Int) extends Status
 
-  final case class ClusterState(members: Map[Int, State[IO]]) {
+  final case class ClusterState(members: Seq[State[IO]], connected: Seq[Boolean]) {
 
     def soleLeaderId: Option[Int] =
-      Option.when(members.values.count(_.role.isLeader) == 1)(
-        members.find(_._2.role.isLeader).get._1)
+      Some(members.indices.toList.filter(i => connected(i) & members(i).role.isLeader))
+        .collect { case id :: Nil => id }
+        .filter { leaderId =>
+          members.indices.toList.filter(connected).map(members(_).role).forall {
+            case Leader(_, _) => true
+            case Follower(Some(`leaderId`), _) => true
+            case _ => false
+          }
+        }
 
-    def hasNoLeader: Boolean = members.values.count(_.role.isLeader) == 0
-
+    def hasNoLeader: Boolean = !members.lazyZip(connected).exists(_.role.isLeader & _)
   }
 }
 
@@ -54,69 +65,148 @@ class RaftSpec extends Specification with CatsEffect {
 
   override val Timeout: FiniteDuration = 10.seconds
 
-  def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, ClusterState])] =
-    for {
-      deferredServers <- Vector.fill(size)(Deferred[IO, GrpcRaft[IO]]).sequence
-      servers = deferredServers.map(GrpcRaft.deferred[IO])
-      signal <- SignallingRef[IO, Map[Int, State[IO]]](Map.empty)
-      rafts <- deferredServers.traverseWithIndexM { (deferred, id) =>
-        val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
-        Random.scalaUtilRandom[IO].flatMap { implicit random =>
-          for {
-            connected <- IO.ref(true)
-            raft <- GrpcRaft[IO](
-              id,
-              peers.view.mapValues(GrpcRaft.flaky(_, connected)).toMap,
-              GrpcRaft.Config(100.milliseconds, 1.seconds, 0.5))
-            _ <- deferred.complete(GrpcRaft.flaky(raft, connected))
-            stream = raft
-              .state
-              .foreach { s =>
-                connected.get.flatMap {
-                  if (_)
-                    signal.update(_.updated(id, s))
-                  else
-                    signal.update(_.removed(id))
-                }
-              }
-              .drain
-          } yield (
-            TestRaft(raft, connected.get, connected.set(true), connected.set(false)),
-            stream)
+  def createCluster(size: Int): Stream[IO, (Seq[TestRaft], Stream[IO, ClusterState])] =
+    Stream.eval {
+      for {
+        deferredServers <- Vector.fill(size)(Deferred[IO, GrpcRaft[IO]]).sequence
+        servers = deferredServers.map(GrpcRaft.deferred[IO])
+        signal <- SignallingRef[IO, Map[Int, State[IO]]](Map.empty)
+        rafts <- deferredServers.traverseWithIndexM { (deferred, id) =>
+          val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
+          Random.scalaUtilRandom[IO].flatMap { implicit random =>
+            for {
+              connected <- IO.ref(true)
+              raft <- GrpcRaft[IO](
+                id,
+                peers.view.mapValues(GrpcRaft.flaky(_, connected)).toMap,
+                GrpcRaft.Config(10.milliseconds, 100.milliseconds, 0.5))
+              _ <- deferred.complete(GrpcRaft.flaky(raft, connected))
+              stream = raft.state.foreach(s => signal.update(_.updated(id, s))).drain
+            } yield (
+              TestRaft(raft, connected.get, connected.set(true), connected.set(false)),
+              stream)
+          }
         }
+        testRafts = rafts.map(_._1)
+        stream = rafts
+          .foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2))
+          .collect {
+            case members if members.size == size => Seq.tabulate(size)(members)
+          }
+          .zipWith(Stream.repeatEval(testRafts.traverse(_.connected)))(ClusterState.apply)
+      } yield (testRafts, stream)
+    }
+
+  implicit object streamAsExecution extends AsExecution[Stream[IO, Status]] {
+    override def execute(t: => Stream[IO, Status]): Execution =
+      effectAsExecution[IO, Result].execute {
+        t.collectFirst { case Target => () }.compile.lastOrError.as(success).timeout(Timeout)
       }
-      testRafts = rafts.map(_._1)
-      stream = rafts
-        .foldLeft(signal.discrete)((acc, x) => acc.concurrently(x._2))
-        .map(ClusterState)
-    } yield (testRafts, stream)
+  }
 
   "GrpcRaft" should {
 
-    "elect a single leader" in createCluster(3).flatMap {
-      case (_, states) =>
-        states.find(_.soleLeaderId.isDefined).compile.lastOrError.as(success).timeout(Timeout)
-    }
+    Fragments.foreach(List(3, 5)) { size =>
+      implicit class StringOps(s: String) {
+        def withSize = s"$s in cluster of $size"
+      }
 
-    "elect a new leader" in createCluster(3).flatMap {
-      case (rafts, states) =>
-        states
-          .evalScan(List.empty[Status]) {
-            case (Nil, cluster) if cluster.soleLeaderId.isDefined =>
+      "elect a single leader".withSize in createCluster(size).flatMap {
+        case (_, states) =>
+          states.find(_.soleLeaderId.isDefined).as(Target: Status)
+      }
+
+      "elect a new leader".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
               val leaderId = cluster.soleLeaderId.get
               val leader = cluster.members(leaderId)
-              rafts(leaderId).disconnect.as(Reign(0, leaderId, leader.currentTerm) :: Nil)
-            case (Reign(0, prevLeader, prevTerm) :: _, cluster) if cluster.soleLeaderId.exists {
+              rafts(leaderId).disconnect.as(Reign(0, leaderId, leader.currentTerm))
+            case (Reign(0, prevLeader, prevTerm), cluster) if cluster.soleLeaderId.exists {
                   id => id != prevLeader && cluster.members(id).currentTerm > prevTerm
                 } =>
-              IO.pure(Target :: Nil)
+              IO.pure(Target)
             case (status, _) => IO.pure(status)
           }
-          .collectFirst { case Target :: _ => () }
-          .compile
-          .lastOrError
-          .as(success)
-          .timeout(Timeout)
+      }
+
+      "elect a new leader once a quorum is reached".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              val leader = cluster.members(leaderId)
+              (leaderId to (leaderId + size / 2))
+                .map(_ % size)
+                .toList
+                .traverse(rafts(_).disconnect)
+                .as(Reign(0, leaderId, leader.currentTerm))
+            case (Reign(0, prevLeader, prevTerm), cluster)
+                if cluster.hasNoLeader & cluster
+                  .members
+                  .exists(_.currentTerm >= prevTerm + 2) =>
+              ((prevLeader + 1) to (prevLeader + size / 2))
+                .map(_ % size)
+                .toList
+                .traverse(rafts(_).connect)
+                .as(Epoch(1))
+            case (Epoch(1), cluster) if cluster.soleLeaderId.isDefined =>
+              IO.pure(Target)
+            case (status, _) => IO.pure(status)
+          }
+      }
+
+      "recover from catastrophic failure".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          states.evalScan(Initial: Status) {
+            case (Initial, _) =>
+              rafts.traverse(_.disconnect) as Epoch(0)
+            case (Epoch(0), cluster)
+                if cluster.hasNoLeader & cluster.members.exists(_.currentTerm >= 2) =>
+              rafts.traverse(_.connect) as Epoch(1)
+            case (Epoch(1), cluster) if cluster.soleLeaderId.isDefined =>
+              IO.pure(Target)
+            case (status, _) => IO.pure(status)
+          }
+      }
+
+      "ignore an old leader".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              val leader = cluster.members(leaderId)
+              rafts(leaderId).disconnect.as(Reign(0, leaderId, leader.currentTerm))
+            case (Reign(0, prevLeader, _), cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              val leader = cluster.members(leaderId)
+              rafts(prevLeader).connect.as(Reign(1, leaderId, leader.currentTerm))
+            case (Reign(1, expectedLeader, expectedTerm), cluster)
+                if cluster.soleLeaderId.exists { id =>
+                  id == expectedLeader && cluster.members(id).currentTerm == expectedTerm
+                } =>
+              IO.pure(Target)
+            case (status, _) => IO.pure(status)
+          }
+      }
+
+      "run election when follower returns".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              val leader = cluster.members(leaderId)
+              rafts((leaderId + 1) % size).disconnect.as(Reign(0, leaderId, leader.currentTerm))
+            case (Reign(0, leaderId, currentTerm), cluster)
+                if cluster.members.exists(_.currentTerm >= currentTerm + 2) =>
+              rafts((leaderId + 1) % size).connect.as(Reign(1, leaderId, currentTerm))
+            case (Reign(1, _, prevTerm), cluster)
+                if cluster.soleLeaderId.exists(cluster.members(_).currentTerm > prevTerm) =>
+              IO.pure(Target)
+            case (status, _) => IO.pure(status)
+          }
+      }
     }
   }
 
