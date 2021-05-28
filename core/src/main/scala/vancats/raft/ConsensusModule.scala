@@ -147,7 +147,7 @@ private[raft] object ConsensusModule {
     override def term = Some(request.term)
   }
 
-  final private[raft] case class CastBallot[F[_]](reply: RequestVoteReply) extends Command[F] {
+  final private[raft] case class CountBallot[F[_]](reply: RequestVoteReply) extends Command[F] {
     override def term = Some(reply.term)
   }
 
@@ -241,7 +241,7 @@ private[raft] object ConsensusModule {
                     .complete(RequestVoteReply(currentTerm, grantVote))
                     .as(state.copy(votedFor = if (grantVote) Some(candidateId) else votedFor))
 
-                case CastBallot(RequestVoteReply(_, voteGranted)) =>
+                case CountBallot(RequestVoteReply(_, voteGranted)) =>
                   role match {
                     case Candidate(votes, _) if voteGranted && votes + 1 > serverCount / 2 =>
                       scheduleHeartBeat(currentTerm).as(
@@ -342,7 +342,7 @@ private[raft] object ConsensusModule {
                                 log.size,
                                 log.lastOption.fold(currentTerm + 1)(_.term)),
                               new Metadata())
-                            .flatMap(reply => channel.send(CastBallot(reply)))
+                            .flatMap(reply => channel.send(CountBallot(reply)))
                             .start
                         }
                       } yield state.copy(
