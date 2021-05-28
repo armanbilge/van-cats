@@ -33,6 +33,8 @@ object RaftSpec {
 
 class RaftSpec extends Specification with CatsEffect {
 
+  override val Timeout: FiniteDuration = 10.seconds
+
   def createCluster(size: Int): IO[(Seq[TestRaft], Stream[IO, Seq[State]])] =
     for {
       deferredServers <- Vector.fill(size)(Deferred[IO, GrpcRaft[IO]]).sequence
@@ -42,7 +44,7 @@ class RaftSpec extends Specification with CatsEffect {
         val peers = servers.zipWithIndex.map(_.swap).toMap.removed(id)
         Random.scalaUtilRandom[IO].flatMap { implicit random =>
           for {
-            raft <- GrpcRaft[IO](id, peers, GrpcRaft.Config(500.milliseconds, 1.seconds, 0.5))
+            raft <- GrpcRaft[IO](id, peers, GrpcRaft.Config(100.milliseconds, 1.seconds, 0.5))
             _ <- deferred.complete(raft)
             switch <- Semaphore[IO](1)
             stream = raft
@@ -69,7 +71,36 @@ class RaftSpec extends Specification with CatsEffect {
             .compile
             .lastOrError
             .as(success)
+            .timeout(Timeout)
       }
+    }
+
+    "elect a new leader" in {
+      for {
+        (rafts, states) <- createCluster(3)
+        firstLeader <- Deferred[IO, (Int, Int)]
+        _ <- firstLeader.get.flatMap(l => rafts(l._1).freeze).start
+        success <- states
+          .evalTap { state =>
+            if (state.count(_.role.isLeader) == 1) {
+              val leader = state.indexWhere(_.role.isLeader)
+              val term = state(leader).currentTerm
+              firstLeader.complete((leader, term))
+            } else IO.unit
+          }
+          .prefetchN(Int.MaxValue)
+          .zip(Stream.repeatEval(firstLeader.get))
+          .find {
+            case (state, (_, prevTerm)) =>
+              val alive = state.filter(_.currentTerm > prevTerm)
+              alive.count(_.role.isLeader) == 1 & alive.count(_.role.isFollower) == 1
+            case _ => false
+          }
+          .compile
+          .lastOrError
+          .as(success)
+          .timeout(Timeout)
+      } yield success
     }
   }
 
