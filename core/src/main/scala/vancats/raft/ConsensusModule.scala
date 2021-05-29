@@ -25,6 +25,7 @@ import com.google.protobuf.ByteString
 import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import io.grpc.Metadata
+import vancats.data.Tsil
 import vancats.raft.ConsensusModule.{Command, State}
 
 import scala.annotation.tailrec
@@ -44,7 +45,7 @@ private[raft] object ConsensusModule {
       role: Role[F],
       currentTerm: Int = 0,
       votedFor: Option[Int] = None,
-      log: Seq[LogEntry] = Seq.empty,
+      log: Tsil[LogEntry] = Tsil.empty,
       commitIndex: Int = 0, // All entries strictly below this index have been committed
       lastApplied: Int = 0 // All entries strictly below this index have been applied
   ) {
@@ -89,7 +90,7 @@ private[raft] object ConsensusModule {
         implicit F: Concurrent[F]): F[State[F]] =
       if (commitIndex > lastApplied)
         Stream
-          .emits(log.slice(lastApplied, commitIndex))
+          .emits(log.slice(lastApplied, commitIndex).toList)
           .map(_.command)
           .through(commit)
           .compile
@@ -205,7 +206,7 @@ private[raft] object ConsensusModule {
                       id,
                       nextIndex,
                       log.lastOption.fold(currentTerm)(_.term),
-                      log.drop(nextIndex),
+                      log.drop(nextIndex).toList,
                       commitIndex
                     ),
                     new Metadata)
@@ -274,6 +275,7 @@ private[raft] object ConsensusModule {
                       if (accept) {
                         val (unchanged, unverified) = log.splitAt(logIndex)
                         val verified = unverified
+                          .toList
                           .lazyZip(entries)
                           .map { (entry, shouldMatch) =>
                             if (entry.term == shouldMatch.term)
@@ -283,7 +285,7 @@ private[raft] object ConsensusModule {
                           }
                           .takeWhile(_.nonEmpty)
                           .flatten
-                        val updatedLog = unchanged ++ verified
+                        val updatedLog = unchanged ++ Tsil.fromList(verified)
                         for {
                           follower <- state.becomeFollower(Some(leaderId), scheduleElection)
                           committed <- follower

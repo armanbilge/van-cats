@@ -27,6 +27,7 @@ addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/he
 
 val CatsEffectVersion = "3.1.1"
 val Fs2Version = "3.0.4"
+val Specs2Version = "4.12.0"
 
 lazy val root =
   project.aggregate(core).enablePlugins(NoPublishPlugin)
@@ -44,7 +45,9 @@ lazy val core = project
         .Version
         .scalapbVersion % "protobuf",
       "org.typelevel" %% "cats-effect-testing-specs2" % "1.1.1" % Test,
-      "org.specs2" %% "specs2-core" % "4.12.0" % Test cross CrossVersion.for3Use2_13
+      "org.scalacheck" %% "scalacheck" % "1.15.4" % Test,
+      "org.specs2" %% "specs2-core" % Specs2Version % Test cross CrossVersion.for3Use2_13,
+      "org.specs2" %% "specs2-scalacheck" % Specs2Version % Test cross CrossVersion.for3Use2_13
     )
   )
   .enablePlugins(Fs2Grpc)
