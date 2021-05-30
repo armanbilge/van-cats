@@ -283,8 +283,8 @@ class RaftSpec extends Specification with CatsEffect {
 
           val commit = rafts
             .map(_.raft.commit.scan(List.empty[ByteString])(_ :+ _))
-            .foldRight(Stream.repeatEval(IO.pure(List.empty[List[ByteString]])).repeat) { (commit, acc) =>
-              commit.zipWith(acc)(_ :: _)
+            .foldRight(Stream.repeatEval(IO.pure(List.empty[List[ByteString]])).repeat) {
+              (commit, acc) => commit.zipWith(acc)(_ :: _)
             }
             .collect { case x if x.forall(_ == commands) => Target: Status }
             .head
