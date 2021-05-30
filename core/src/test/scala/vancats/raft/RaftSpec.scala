@@ -20,6 +20,7 @@ import cats.effect.std.Random
 import cats.effect.testing.specs2.CatsEffect
 import cats.effect.{Deferred, IO}
 import cats.syntax.all._
+import com.google.protobuf.ByteString
 import fs2.Stream
 import fs2.concurrent.SignallingRef
 import org.specs2.execute.Result
@@ -58,6 +59,14 @@ object RaftSpec {
         }
 
     def hasNoLeader: Boolean = !members.lazyZip(connected).exists(_.role.isLeader & _)
+
+    def isCommitted(command: ByteString): Boolean =
+      connected.exists(identity) && members.lazyZip(connected).forall { (state, connected) =>
+        !connected || {
+          val index = state.log.lastIndexWhere(_.command == command)
+          index != -1 && state.commitIndex > index
+        }
+      }
   }
 }
 
@@ -205,6 +214,96 @@ class RaftSpec extends Specification with CatsEffect {
                 if cluster.soleLeaderId.exists(cluster.members(_).currentTerm > prevTerm) =>
               IO.pure(Target)
             case (status, _) => IO.pure(status)
+          }
+      }
+
+      "commit one command".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          val command = ByteString.copyFromUtf8("meow")
+
+          val commit = rafts
+            .map(_.raft.commit)
+            .foldRight(Stream.repeatEval(IO.pure(List.empty[ByteString]))) { (commit, acc) =>
+              commit.zipWith(acc)(_ :: _)
+            }
+            .collect { case x if x.forall(_ == command) => Target: Status }
+            .head
+            .repeat
+            .merge(Stream.repeatEval(IO.pure(Initial)))
+
+          val state = states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              rafts(leaderId).raft.command1(command).as(Epoch(0))
+            case (Epoch(0), cluster) if cluster.isCommitted(command) =>
+              IO.pure(Target)
+            case (status, _) =>
+              IO.pure(status)
+          }
+
+          state.zipWith(commit) {
+            case (Target, Target) => Target: Status
+            case _ => Initial: Status
+          }
+      }
+
+      "commit one command submitted to non-leader".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          val command = ByteString.copyFromUtf8("meow")
+
+          val commit = rafts
+            .map(_.raft.commit)
+            .foldRight(Stream.repeatEval(IO.pure(List.empty[ByteString]))) { (commit, acc) =>
+              commit.zipWith(acc)(_ :: _)
+            }
+            .collect { case x if x.forall(_ == command) => Target: Status }
+            .head
+            .repeat
+            .merge(Stream.repeatEval(IO.pure(Initial)))
+
+          val state = states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              rafts((leaderId + 1) % size).raft.command1(command).as(Epoch(0))
+            case (Epoch(0), cluster) if cluster.isCommitted(command) =>
+              IO.pure(Target)
+            case (status, _) =>
+              IO.pure(status)
+          }
+
+          state.zipWith(commit) {
+            case (Target, Target) => Target: Status
+            case _ => Initial: Status
+          }
+      }
+
+      "commit multiple commands".withSize in createCluster(size).flatMap {
+        case (rafts, states) =>
+          val commands = List("meee", "owww", "!!!").map(ByteString.copyFromUtf8)
+
+          val commit = rafts
+            .map(_.raft.commit.scan(List.empty[ByteString])(_ :+ _))
+            .foldRight(Stream.repeatEval(IO.pure(List.empty[List[ByteString]])).repeat) { (commit, acc) =>
+              commit.zipWith(acc)(_ :: _)
+            }
+            .collect { case x if x.forall(_ == commands) => Target: Status }
+            .head
+            .repeat
+            .merge(Stream.repeatEval(IO.pure(Initial)))
+
+          val state = states.evalScan(Initial: Status) {
+            case (Initial, cluster) if cluster.soleLeaderId.isDefined =>
+              val leaderId = cluster.soleLeaderId.get
+              rafts(leaderId).raft.command(Stream.emits(commands)).compile.drain.as(Epoch(0))
+            case (Epoch(0), cluster) if cluster.isCommitted(commands.last) =>
+              IO.pure(Target)
+            case (status, _) =>
+              IO.pure(status)
+          }
+
+          state.zipWith(commit) {
+            case (Target, Target) => Target: Status
+            case _ => Initial: Status
           }
       }
     }

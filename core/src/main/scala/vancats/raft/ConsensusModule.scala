@@ -193,6 +193,7 @@ private[raft] object ConsensusModule {
     cancelElection <- scheduleElection(0)
     fsm = channel
       .stream
+//      .debug(o => s"${java.time.Clock.systemUTC().instant()} server $id: $o")
       .evalScan(State(Follower(nextElection = NextElection(0, cancelElection)))) {
         (server, command) =>
           server.updateTerm(command, scheduleElection).flatMap {
@@ -266,32 +267,18 @@ private[raft] object ConsensusModule {
                         entries,
                         leaderCommit),
                       reply) =>
-                  val accept = term >= currentTerm &
-                    logIndex <= log.size &
+                  val accept = term >= currentTerm &&
+                    logIndex <= log.size &&
                     log.lift(logIndex - 1).forall(_.term == prevLogTerm)
                   for {
                     _ <- reply.complete(AppendEntriesReply(currentTerm, accept))
                     server <-
                       if (accept) {
-                        val (unchanged, unverified) = log.splitAt(logIndex)
-                        val verified = unverified
-                          .toList
-                          .lazyZip(entries)
-                          .map { (entry, shouldMatch) =>
-                            if (entry.term == shouldMatch.term)
-                              entry :: Nil
-                            else
-                              Nil
-                          }
-                          .takeWhile(_.nonEmpty)
-                          .flatten
-                        val updatedLog = unchanged ++ Tsil.fromList(verified)
+                        val updatedLog = log.take(logIndex) ++ Tsil.fromSeq(entries)
                         for {
                           follower <- state.becomeFollower(Some(leaderId), scheduleElection)
                           committed <- follower
-                            .copy(commitIndex =
-                              if (leaderCommit > commitIndex) leaderCommit min updatedLog.size
-                              else commitIndex)
+                            .copy(commitIndex = leaderCommit, log = updatedLog)
                             .commit(commit)
                         } yield committed
                       } else if (term >= currentTerm)
@@ -358,6 +345,7 @@ private[raft] object ConsensusModule {
               }
           }
       }
+//      .debug(o => s"${java.time.Clock.systemUTC().instant()} server $id: $o")
 
   } yield new ConsensusModule[F] {
     override def command: Pipe[F, Command[F], Nothing] =

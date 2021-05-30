@@ -16,6 +16,8 @@
 
 package vancats.data
 
+import cats.Eq
+
 final class Tsil[+A](private val reversed: List[A], val size: Int)
     extends PartialFunction[Int, A] {
 
@@ -41,6 +43,22 @@ final class Tsil[+A](private val reversed: List[A], val size: Int)
 
   def nonEmpty: Boolean = !isEmpty
 
+  def indexOf[B >: A: Eq](b: B): Int =
+    indexWhere(Eq[B].eqv(_, b))
+
+  def indexWhere(pred: A => Boolean): Int = {
+    val i = reversed.lastIndexWhere(pred)
+    if (i == -1) -1 else size - i - 1
+  }
+
+  def lastIndexOf[B >: A: Eq](b: B): Int =
+    lastIndexWhere(Eq[B].eqv(_, b))
+
+  def lastIndexWhere(pred: A => Boolean): Int = {
+    val i = reversed.indexWhere(pred)
+    if (i == -1) -1 else size - i - 1
+  }
+
   def concat[A2 >: A](t: Tsil[A2]): Tsil[A2] =
     new Tsil(t.reversed ::: reversed, t.size + size)
 
@@ -59,15 +77,21 @@ final class Tsil[+A](private val reversed: List[A], val size: Int)
   def :+[A2 >: A](a: A2): Tsil[A2] =
     append(a)
 
-  def drop(n: Int): Tsil[A] = {
-    val m = (size - n) max 0
-    new Tsil(reversed.take(m), m min size)
+  def take(n: Int): Tsil[A] = {
+    val m = size - n
+    new Tsil(reversed.drop(m), ((size - m) min size) max 0)
   }
 
-  def dropRight(n: Int): Tsil[A] = {
-    val m = (size - n) max 0
-    new Tsil(reversed.takeRight(m), m min size)
+  def takeRight(n: Int): Tsil[A] =
+    new Tsil(reversed.take(n), (n min size) max 0)
+
+  def drop(n: Int): Tsil[A] = {
+    val m = size - n
+    new Tsil(reversed.take(m), (m min size) max 0)
   }
+
+  def dropRight(n: Int): Tsil[A] =
+    new Tsil(reversed.drop(n), ((size - n) min size) max 0)
 
   def slice(from: Int, until: Int): Tsil[A] = if (until > from) {
     val before = size - until - 1
@@ -104,8 +128,11 @@ object Tsil {
     new Tsil(as.view.reverse.toList, as.size)
 
   def unapplySeq[A](tsil: Tsil[A]): Some[Seq[A]] =
-    Some(tsil.reversed)
+    Some(tsil.toList)
 
   def fromList[A](l: List[A]): Tsil[A] =
     new Tsil(l.reverse, l.size)
+
+  def fromSeq[A](s: Seq[A]): Tsil[A] =
+    new Tsil(s.view.reverse.toList, s.size)
 }

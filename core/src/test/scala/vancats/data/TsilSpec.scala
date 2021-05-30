@@ -71,6 +71,14 @@ class TsilSpec extends Specification with ScalaCheck {
 
     "nonEmpty" in prop { (t: Tsil[Int]) => t.nonEmpty should_=== t.safeToList.nonEmpty }
 
+    "indexOf" in prop { (t: Tsil[Int], i: Int) =>
+      forall(i :: t.toList) { x => t.indexOf(x) should_=== t.safeToList.indexOf(x) }
+    }
+
+    "lastIndexOf" in prop { (t: Tsil[Int], i: Int) =>
+      forall(i :: t.toList) { x => t.lastIndexOf(x) should_=== t.safeToList.lastIndexOf(x) }
+    }
+
     "concat" in prop { (x: Tsil[Int], y: Tsil[Int]) =>
       (x ++ y).safeToList should_=== x.safeToList ++ y.safeToList
     }
@@ -81,6 +89,18 @@ class TsilSpec extends Specification with ScalaCheck {
 
     "append" in prop { (x: Tsil[Int], y: Int) =>
       (x :+ y).safeToList should_=== x.safeToList :+ y
+    }
+
+    "take" in prop { (t: Tsil[Int]) =>
+      forall(-t.size to 2 * t.size) { n =>
+        t.take(n).safeToList should_=== t.safeToList.take(n)
+      }
+    }
+
+    "takeRight" in prop { (t: Tsil[Int]) =>
+      forall(-t.size to 2 * t.size) { n =>
+        t.takeRight(n).safeToList should_=== t.safeToList.takeRight(n)
+      }
     }
 
     "drop" in prop { (t: Tsil[Int]) =>
