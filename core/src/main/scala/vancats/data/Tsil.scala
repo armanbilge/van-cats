@@ -103,6 +103,9 @@ object Tsil {
   def apply[A](as: A*): Tsil[A] =
     new Tsil(as.view.reverse.toList, as.size)
 
+  def unapplySeq[A](tsil: Tsil[A]): Some[Seq[A]] =
+    Some(tsil.reversed)
+
   def fromList[A](l: List[A]): Tsil[A] =
     new Tsil(l.reverse, l.size)
 }
