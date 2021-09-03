@@ -7,7 +7,6 @@ ThisBuild / startYear := Some(2021)
 
 mimaPreviousArtifacts := Set()
 
-enablePlugins(SonatypeCiReleasePlugin)
 ThisBuild / homepage := Some(url("https://github.com/armanbilge/van-cats"))
 ThisBuild / scmInfo := Some(
   ScmInfo(
@@ -15,39 +14,40 @@ ThisBuild / scmInfo := Some(
     "git@github.com:armanbilge/van-cats.git"))
 sonatypeCredentialHost := "s01.oss.sonatype.org"
 
-val Scala213 = "2.13.6"
-val Scala3 = "3.0.0"
-ThisBuild / crossScalaVersions := Seq(Scala3, Scala213)
+val Scala3 = "3.0.1"
+ThisBuild / crossScalaVersions := Seq(Scala3)
 
 replaceCommandAlias(
   "ci",
   "; project /; headerCheckAll; scalafmtCheckAll; scalafmtSbtCheck; clean; testIfRelevant; mimaReportBinaryIssuesIfRelevant"
 )
+replaceCommandAlias(
+  "release",
+  "; reload; project /; +mimaReportBinaryIssuesIfRelevant; +publishIfRelevant; sonatypeBundleRelease"
+)
 addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/headerCreate")
 
-val CatsEffectVersion = "3.1.1"
-val Fs2Version = "3.0.4"
-val Specs2Version = "4.12.0"
+val CatsEffectVersion = "3.2.5"
+val Fs2Version = "3.1.1"
+val Specs2Version = "4.12.9"
+
+val commonSettings = Seq(
+  scalacOptions ++=
+    Seq("-new-syntax", "-indent", "-source:future"),
+  sonatypeCredentialHost := "s01.oss.sonatype.org"
+)
 
 lazy val root =
-  project.aggregate(core).enablePlugins(NoPublishPlugin)
+  project.aggregate(core.jvm, core.js).enablePlugins(NoPublishPlugin)
 
-lazy val core = project
+lazy val core = crossProject(JVMPlatform, JSPlatform)
+  .crossType(CrossType.Pure)
   .in(file("core"))
   .settings(
     name := "van-cats",
-    sonatypeCredentialHost := "s01.oss.sonatype.org",
     libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-effect" % CatsEffectVersion,
-      "co.fs2" %% "fs2-core" % Fs2Version,
-      "com.thesamet.scalapb" %% "scalapb-runtime" % scalapb
-        .compiler
-        .Version
-        .scalapbVersion % "protobuf",
-      "org.typelevel" %% "cats-effect-testing-specs2" % "1.1.1" % Test,
-      "org.scalacheck" %% "scalacheck" % "1.15.4" % Test,
-      "org.specs2" %% "specs2-core" % Specs2Version % Test cross CrossVersion.for3Use2_13,
-      "org.specs2" %% "specs2-scalacheck" % Specs2Version % Test cross CrossVersion.for3Use2_13
+      "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
+      "co.fs2" %%% "fs2-core" % Fs2Version
     )
   )
-  .enablePlugins(Fs2Grpc)
+  .settings(commonSettings)
