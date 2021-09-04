@@ -53,7 +53,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
       "co.fs2" %%% "fs2-io" % Fs2Version,
       "org.typelevel" %%% "vault" % VaultVersion,
       "com.comcast" %%% "ip4s-core" % Ip4sVersion,
-      "org.scodec" %%% "scodec-core" % ScodecVersion,
+      "org.scodec" %%% "scodec-core" % ScodecVersion
     )
   )
   .settings(commonSettings)
