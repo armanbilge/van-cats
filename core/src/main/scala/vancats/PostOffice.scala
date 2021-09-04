@@ -44,24 +44,24 @@ import scodec.Encoder
 import scodec.bits.BitVector
 import scodec.bits.ByteVector
 
-trait PostOffice[F[_]] extends CollectionBox[F], POBoxProvider[F]
+trait PostOffice[F[_]] extends CollectionBox[F], PoBoxProvider[F]
 
 trait CollectionBox[F[_]]:
   def address: F[SocketAddress[IpAddress]]
-  def sendLetter[A: Encoder](to: POBoxAddress, message: A): F[Unit]
+  def sendLetter[A: Encoder](to: PoBoxAddress, message: A): F[Unit]
   def sendLetters[A: Encoder]: Pipe[F, Letter[A], INothing]
 
-trait POBoxProvider[F[_]]:
-  def leaseBox[A: Decoder]: Resource[F, (POBoxAddress, Stream[F, A])]
-  def leaseBox[A: Decoder](name: String): Resource[F, (POBoxAddress, Stream[F, A])]
+trait PoBoxProvider[F[_]]:
+  def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress, Stream[F, A])]
+  def leaseBox[A: Decoder](name: String): Resource[F, (PoBoxAddress, Stream[F, A])]
 
-final case class Letter[+A](to: POBoxAddress, message: A):
+final case class Letter[+A](to: PoBoxAddress, message: A):
   private[vancats] def toWire[F[_]](using F: ApplicativeThrow[F], e: Encoder[A]) =
     F.fromTry(e.encode(message).toTry).map(WireLetter(to.box, _))
 
 final private[vancats] case class WireLetter(to: String, message: BitVector) derives Codec
 
-final case class POBoxAddress(postOffice: SocketAddress[IpAddress], box: String) derives Codec
+final case class PoBoxAddress(postOffice: SocketAddress[IpAddress], box: String) derives Codec
 
 object DatagramPostOffice:
   def apply[F[_]: Concurrent](using sg: DatagramSocketGroup[F]): Resource[F, PostOffice[F]] =
@@ -90,7 +90,7 @@ object DatagramPostOffice:
     yield new PostOffice[F]:
       def address = socket.localAddress
 
-      def sendLetter[A: Encoder](to: POBoxAddress, message: A) =
+      def sendLetter[A: Encoder](to: PoBoxAddress, message: A) =
         Stream.emit(Letter(to, message)).through(sendLetters).compile.drain
 
       def sendLetters[A: Encoder] = (_: Stream[F, Letter[A]])
@@ -102,14 +102,14 @@ object DatagramPostOffice:
         }
         .through(socket.writes)
 
-      def leaseBox[A: Decoder]: Resource[F, (POBoxAddress, Stream[F, A])] =
+      def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress, Stream[F, A])] =
         for
           id <- boxCounter.modifyState(SplitMix64).toResource
           box <- leaseBox(ByteVector.fromLong(id).toBase64)
         yield box
 
       def leaseBox[A](name: String)(
-          using decoder: Decoder[A]): Resource[F, (POBoxAddress, Stream[F, A])] =
+          using decoder: Decoder[A]): Resource[F, (PoBoxAddress, Stream[F, A])] =
         Resource.make {
           for
             queue <- Queue.unbounded[F, BitVector]
@@ -118,7 +118,7 @@ object DatagramPostOffice:
                 (boxes, Left(new RuntimeException(s"Name `${name}` is already leased")))
               else (boxes.updated(name, queue), Right(()))
             }.rethrow
-            address <- address.map(POBoxAddress(_, name))
+            address <- address.map(PoBoxAddress(_, name))
             stream: Stream[F, A] = Stream
               .fromQueueUnterminated(queue)
               .evalMap(b => F.fromTry(decoder.decode(b).toTry.map(_.value)))
