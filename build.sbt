@@ -29,7 +29,10 @@ addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/he
 
 val CatsEffectVersion = "3.2.5"
 val Fs2Version = "3.1.1"
+val Ip4sVersion = "3.0.3"
+val ScodecVersion = "2.0.0"
 val Specs2Version = "4.12.9"
+val VaultVersion = "3.0.4"
 
 val commonSettings = Seq(
   scalacOptions ++=
@@ -47,7 +50,10 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
     name := "van-cats",
     libraryDependencies ++= Seq(
       "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
-      "co.fs2" %%% "fs2-core" % Fs2Version
+      "co.fs2" %%% "fs2-io" % Fs2Version,
+      "org.typelevel" %%% "vault" % VaultVersion,
+      "com.comcast" %%% "ip4s-core" % Ip4sVersion,
+      "org.scodec" %%% "scodec-core" % ScodecVersion,
     )
   )
   .settings(commonSettings)
