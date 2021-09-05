@@ -48,20 +48,21 @@ trait PostOffice[F[_]] extends CollectionBox[F], PoBoxProvider[F]
 
 trait CollectionBox[F[_]]:
   def address: F[SocketAddress[IpAddress]]
-  def sendLetter[A: Encoder](to: PoBoxAddress, message: A): F[Unit]
+  def sendLetter[A: Encoder](to: PoBoxAddress[A], message: A): F[Unit]
   def sendLetters[A: Encoder]: Pipe[F, Letter[A], INothing]
 
 trait PoBoxProvider[F[_]]:
-  def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress, Stream[F, A])]
-  def leaseBox[A: Decoder](name: String): Resource[F, (PoBoxAddress, Stream[F, A])]
+  def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress[A], Stream[F, A])]
+  def leaseBox[A: Decoder](name: String): Resource[F, (PoBoxAddress[A], Stream[F, A])]
 
-final case class Letter[+A](to: PoBoxAddress, message: A):
+final case class Letter[A](to: PoBoxAddress[A], message: A):
   private[vancats] def toWire[F[_]](using F: ApplicativeThrow[F], e: Encoder[A]) =
     F.fromTry(e.encode(message).toTry).map(WireLetter(to.box, _))
 
 final private[vancats] case class WireLetter(to: String, message: BitVector) derives Codec
 
-final case class PoBoxAddress(postOffice: SocketAddress[IpAddress], box: String) derives Codec
+final case class PoBoxAddress[-A](postOffice: SocketAddress[IpAddress], box: String)
+    derives Codec
 
 object DatagramPostOffice:
   def apply[F[_]: Concurrent](using sg: DatagramSocketGroup[F]): Resource[F, PostOffice[F]] =
@@ -90,7 +91,7 @@ object DatagramPostOffice:
     yield new PostOffice[F]:
       def address = socket.localAddress
 
-      def sendLetter[A: Encoder](to: PoBoxAddress, message: A) =
+      def sendLetter[A: Encoder](to: PoBoxAddress[A], message: A) =
         Stream.emit(Letter(to, message)).through(sendLetters).compile.drain
 
       def sendLetters[A: Encoder] = (_: Stream[F, Letter[A]])
@@ -102,14 +103,14 @@ object DatagramPostOffice:
         }
         .through(socket.writes)
 
-      def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress, Stream[F, A])] =
+      def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress[A], Stream[F, A])] =
         for
           id <- boxCounter.modifyState(SplitMix64).toResource
           box <- leaseBox(ByteVector.fromLong(id).toBase64)
         yield box
 
       def leaseBox[A](name: String)(
-          using decoder: Decoder[A]): Resource[F, (PoBoxAddress, Stream[F, A])] =
+          using decoder: Decoder[A]): Resource[F, (PoBoxAddress[A], Stream[F, A])] =
         Resource.make {
           for
             queue <- Queue.unbounded[F, BitVector]
