@@ -27,7 +27,7 @@ replaceCommandAlias(
 )
 addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/headerCreate")
 
-val CatsEffectVersion = "3.2.5"
+val CatsEffectVersion = "3.2.7"
 val Fs2Version = "3.1.1"
 val Ip4sVersion = "3.0.3"
 val ScodecVersion = "2.0.0"
