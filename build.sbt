@@ -14,7 +14,7 @@ ThisBuild / scmInfo := Some(
     "git@github.com:armanbilge/van-cats.git"))
 sonatypeCredentialHost := "s01.oss.sonatype.org"
 
-val Scala3 = "3.0.1"
+val Scala3 = "3.0.2"
 ThisBuild / crossScalaVersions := Seq(Scala3)
 
 replaceCommandAlias(
