@@ -43,6 +43,7 @@ import scodec.Decoder
 import scodec.Encoder
 import scodec.bits.BitVector
 import scodec.bits.ByteVector
+import scodec.Iso
 
 trait PostOffice[F[_]] extends CollectionBox[F], PoBoxProvider[F]
 
@@ -62,7 +63,9 @@ final case class Letter[A](to: PoBoxAddress[A], message: A):
 final private[vancats] case class WireLetter(to: String, message: BitVector) derives Codec
 
 final case class PoBoxAddress[-A](postOffice: SocketAddress[IpAddress], box: String)
-    derives Codec
+object PoBoxAddress:
+  given [A]: Codec[PoBoxAddress[A]] =
+    Codec.derived[PoBoxAddress[Nothing]].xmap(_.asInstanceOf[PoBoxAddress[A]], identity)
 
 object DatagramPostOffice:
   def apply[F[_]: Concurrent](using sg: DatagramSocketGroup[F]): Resource[F, PostOffice[F]] =
