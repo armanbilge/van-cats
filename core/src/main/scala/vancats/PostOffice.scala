@@ -106,7 +106,7 @@ object DatagramPostOffice:
       def leaseBox[A: Decoder]: Resource[F, (PoBoxAddress[A], Stream[F, A])] =
         for
           id <- boxCounter.modifyState(SplitMix64).toResource
-          box <- leaseBox(ByteVector.fromLong(id).toBase64)
+          box <- leaseBox(id.toHexString)
         yield box
 
       def leaseBox[A](name: String)(
