@@ -18,6 +18,7 @@ package vancats
 
 import cats.effect.kernel.Resource
 import cats.effect.kernel.Temporal
+import cats.syntax.all.*
 import fs2.INothing
 import fs2.Pipe
 import fs2.Stream
@@ -44,7 +45,7 @@ object LetterWriter:
     case StopReading extends Message[Nothing]
     case Busy extends Message[Nothing]
 
-  final private[vancats] case class State[A](peer: Option[LetterReader[A]])
+  final private[vancats] case class State[A](peer: Option[LetterReader[A]], communicationEstablished: Boolean)
 
 final case class LetterReader[-A](address: PoBoxAddress[LetterWriter.Message[A]]) derives Codec
 object LetterReader:
@@ -68,6 +69,18 @@ object PenPal:
       heartRate: FiniteDuration = 1.second): PenPal[F] =
     new PenPal[F]:
 
+      def writeLetters[A: Encoder](state: LetterWriter.State[A]): Pipe[F, A, LetterWriter[A]] =
+        in =>
+          for
+            (address, messages) <- Stream.resource(postOffice.leaseBox[LetterReader.Message[A]])
+            _ = messages.evalMapAccumulate(state) {
+              case (state @ LetterWriter.State(Some(_), true), message) => (state, message)
+              case (LetterWriter.State(None, _), LetterReader.Message.WriteToMe(reader)) =>
+
+            }
+            out <- Stream.emit(LetterWriter(address))
+          yield out
+
       def writeLetters[A: Encoder]: Pipe[F, A, LetterWriter[A]] = in =>
         for (address, messages) <- Stream.resource(postOffice.leaseBox[LetterReader.Message[A]])
         yield LetterWriter(address)
@@ -78,3 +91,8 @@ object PenPal:
       def readLetters[A: Decoder]: Resource[F, (LetterReader[A], Stream[F, A])] = ???
 
       def readLettersFrom[A: Decoder](writer: LetterWriter[A]): Stream[F, A] = ???
+
+      def readLetters[A: Codec](
+          state: LetterReader.State[A]): Resource[F, (LetterReader[A], Stream[F, A])] =
+        for (address, messages) <- postOffice.leaseBox[LetterWriter.Message[A]]
+        yield ???
