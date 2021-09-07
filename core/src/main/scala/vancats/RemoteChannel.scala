@@ -56,6 +56,6 @@ trait RemoteChannel[F[_]]:
   def mkChannel[A: Codec]: Resource[F, (ChannelAddress[A], Stream[F, A])]
 
   def mkChannel[A: Codec](id: String): Resource[F, (ChannelAddress[A], Stream[F, A])]
-  
+
 object RemoteChannel:
   type Aux[F[_], C[-_]] = RemoteChannel[F] { type ChannelAddress[X] = C[X] }
