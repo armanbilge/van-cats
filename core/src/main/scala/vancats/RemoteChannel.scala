@@ -16,37 +16,13 @@
 
 package vancats
 
-import cats.ApplicativeThrow
-import cats.effect.kernel.Concurrent
 import cats.effect.kernel.Resource
-import cats.effect.std.Queue
-import cats.effect.syntax.all.*
-import cats.syntax.all.*
-import com.comcast.ip4s.Host
-import com.comcast.ip4s.Hostname
-import com.comcast.ip4s.IDN
-import com.comcast.ip4s.IpAddress
-import com.comcast.ip4s.Ipv4Address
-import com.comcast.ip4s.Ipv6Address
-import com.comcast.ip4s.Port
-import com.comcast.ip4s.SocketAddress
-import fs2.Chunk
 import fs2.INothing
 import fs2.Pipe
 import fs2.Stream
-import fs2.io.net.Datagram
-import fs2.io.net.DatagramSocket
-import fs2.io.net.DatagramSocketGroup
-import scodec.Attempt
 import scodec.Codec
-import scodec.Decoder
-import scodec.Encoder
-import scodec.Iso
-import scodec.bits.BitVector
-import scodec.bits.ByteVector
 
 trait RemoteChannel[F[_]]:
-  type Address
   type ChannelAddress[-_]
 
   def send[A: Codec](to: ChannelAddress[A], a: A): F[Unit]

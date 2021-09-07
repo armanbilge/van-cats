@@ -29,23 +29,25 @@ import fs2.io.net.Datagram
 import fs2.io.net.DatagramSocket
 import fs2.io.net.DatagramSocketGroup
 import scodec.Codec
-import scodec.Decoder
-import scodec.Encoder
 import scodec.bits.BitVector
 
 final case class DatagramChannelAddress[-A](socket: SocketAddress[IpAddress], channel: String)
+
+trait DatagramRemoteChannel[F[_]] extends RemoteChannel[F]:
+  type ChannelAddress[A] = DatagramChannelAddress[A]
+
+  def address: F[SocketAddress[IpAddress]]
 
 object DatagramRemoteChannel:
 
   final private case class WireMessage(to: String, data: BitVector) derives Codec
 
   def apply[F[_]: Concurrent](
-      using
-      sg: DatagramSocketGroup[F]): Resource[F, RemoteChannel.Aux[F, DatagramChannelAddress]] =
+      using sg: DatagramSocketGroup[F]): Resource[F, DatagramRemoteChannel[F]] =
     sg.openDatagramSocket(None, None, Nil, None).flatMap(apply[F])
 
   def apply[F[_]](socket: DatagramSocket[F])(
-      using F: Concurrent[F]): Resource[F, RemoteChannel.Aux[F, DatagramChannelAddress]] =
+      using F: Concurrent[F]): Resource[F, DatagramRemoteChannel[F]] =
     for
       (t1, t2) <- F.product(F.unique, F.unique).toResource
       channelCounter <- F.ref(t1.hashCode.toLong << 32 | t2.hashCode.toLong).toResource
@@ -56,7 +58,7 @@ object DatagramRemoteChannel:
           case Datagram(_, bytes) =>
             for
               WireMessage(to, data) <- F.fromTry(
-                Decoder[WireMessage].decode(bytes.toBitVector).toTry.map(_.value))
+                Codec[WireMessage].decode(bytes.toBitVector).toTry.map(_.value))
               channels <- channels.get
               _ <- channels.get(to).fold(F.unit)(_.offer(data))
             yield ()
@@ -64,8 +66,10 @@ object DatagramRemoteChannel:
         .compile
         .drain
         .background
-    yield new RemoteChannel[F]:
+    yield new DatagramRemoteChannel[F]:
       type ChannelAddress[X] = DatagramChannelAddress[X]
+
+      def address = socket.localAddress
 
       def send[A: Codec](to: ChannelAddress[A], a: A) =
         Stream.emit(a).through(sendAll(to)).compile.drain
@@ -76,7 +80,7 @@ object DatagramRemoteChannel:
           for
             payload <- F.fromTry(Codec[List[A]].encode(as.toList).toTry)
             wireMessage <- F.fromTry(
-              Encoder[WireMessage].encode(WireMessage(to.channel, payload)).toTry)
+              Codec[WireMessage].encode(WireMessage(to.channel, payload)).toTry)
           yield Datagram(to.socket, Chunk.byteVector(wireMessage.toByteVector))
         }
         .through(socket.writes)
