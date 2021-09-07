@@ -21,8 +21,8 @@ import cats.effect.kernel.Resource
 import cats.effect.std.Queue
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
-import com.comcast.ip4s.SocketAddress
 import com.comcast.ip4s.IpAddress
+import com.comcast.ip4s.SocketAddress
 import fs2.Chunk
 import fs2.Stream
 import fs2.io.net.Datagram
