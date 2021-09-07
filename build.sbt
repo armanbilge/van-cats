@@ -53,7 +53,9 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
       "co.fs2" %%% "fs2-io" % Fs2Version,
       "org.typelevel" %%% "vault" % VaultVersion,
       "com.comcast" %%% "ip4s-core" % Ip4sVersion,
-      "org.scodec" %%% "scodec-core" % ScodecVersion
-    )
+      "org.scodec" %%% "scodec-core" % ScodecVersion,
+      "org.typelevel" %%% "cats-effect-testing-specs2" % "1.3.0" % Test
+    ),
+    scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule))
   )
   .settings(commonSettings)
