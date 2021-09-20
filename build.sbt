@@ -48,8 +48,7 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
   .settings(
     name := "van-cats",
     libraryDependencies ++= Seq(
-      "org.typelevel" %%% "cats-effect" % CatsEffectV
-      ersion,
+      "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
       "co.fs2" %%% "fs2-io" % Fs2Version,
       "com.comcast" %%% "ip4s-core" % Ip4sVersion,
       "org.scodec" %%% "scodec-core" % ScodecVersion,
