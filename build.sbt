@@ -32,7 +32,7 @@ val Fs2Version = "3.1.2"
 val Ip4sVersion = "3.0.3"
 val ScodecVersion = "2.0.0"
 val Specs2Version = "4.12.9"
-val VaultVersion = "3.0.4"
+val VaultVersion = "3.1.0"
 
 val commonSettings = Seq(
   scalacOptions ++=
