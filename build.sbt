@@ -32,7 +32,6 @@ val Fs2Version = "3.1.2"
 val Ip4sVersion = "3.0.3"
 val ScodecVersion = "2.0.0"
 val Specs2Version = "4.12.9"
-val VaultVersion = "3.0.4"
 
 val commonSettings = Seq(
   scalacOptions ++=
@@ -49,9 +48,9 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
   .settings(
     name := "van-cats",
     libraryDependencies ++= Seq(
-      "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
+      "org.typelevel" %%% "cats-effect" % CatsEffectV
+      ersion,
       "co.fs2" %%% "fs2-io" % Fs2Version,
-      "org.typelevel" %%% "vault" % VaultVersion,
       "com.comcast" %%% "ip4s-core" % Ip4sVersion,
       "org.scodec" %%% "scodec-core" % ScodecVersion,
       "org.typelevel" %%% "cats-effect-testing-specs2" % "1.3.0" % Test
