@@ -5,8 +5,9 @@ ThisBuild / publishGithubUser := "armanbilge"
 ThisBuild / publishFullName := "Arman Bilge"
 ThisBuild / startYear := Some(2021)
 
-mimaPreviousArtifacts := Set()
-
+enablePlugins(SonatypeCiReleasePlugin)
+ThisBuild / spiewakCiReleaseSnapshots := true
+ThisBuild / spiewakMainBranches := Seq("main")
 ThisBuild / homepage := Some(url("https://github.com/armanbilge/van-cats"))
 ThisBuild / scmInfo := Some(
   ScmInfo(
@@ -20,10 +21,6 @@ ThisBuild / crossScalaVersions := Seq(Scala3)
 replaceCommandAlias(
   "ci",
   "; project /; headerCheckAll; scalafmtCheckAll; scalafmtSbtCheck; clean; testIfRelevant; mimaReportBinaryIssuesIfRelevant"
-)
-replaceCommandAlias(
-  "release",
-  "; reload; project /; +mimaReportBinaryIssuesIfRelevant; +publishIfRelevant; sonatypeBundleRelease"
 )
 addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/headerCreate")
 
