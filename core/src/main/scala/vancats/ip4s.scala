@@ -34,14 +34,19 @@ import scodec.codecs
 
 private[vancats] given Codec[SocketAddress[IpAddress]] =
   Codec[(IpAddress, Port)].xmap(SocketAddress.apply, a => (a.host, a.port))
+
 private[vancats] given Codec[IpAddress] = codecs
   .discriminated[IpAddress]
-  .by(codecs.bool(8))
-  .caseP(false) { case ip: Ipv4Address => ip }(identity)(Codec[Ipv4Address])
-  .caseP(true) { case ip: Ipv6Address => ip }(identity)(Codec[Ipv6Address])
+  .by(codecs.byte)
+  .subcaseP(4) { case ip: Ipv4Address => ip }(Codec[Ipv4Address])
+  .subcaseP(6) { case ip: Ipv6Address => ip }(Codec[Ipv6Address])
+
 private[vancats] given Codec[Ipv6Address] = codecs
   .bytes(16)
   .xmap(b => Ipv6Address.fromBytes(b.toArray).get, a => ByteVector.view(a.toBytes))
-private[vancats] given Codec[Ipv4Address] =
-  codecs.int32.xmap(b => Ipv4Address.fromLong(b), _.toLong.toInt)
+
+private[vancats] given Codec[Ipv4Address] = codecs
+  .bytes(4)
+  .xmap(b => Ipv4Address.fromBytes(b.toArray).get, a => ByteVector.view(a.toBytes))
+
 private[vancats] given Codec[Port] = codecs.uint16.xmap(Port.fromInt(_).get, _.value)
