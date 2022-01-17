@@ -1,28 +1,15 @@
-ThisBuild / baseVersion := "0.0"
+ThisBuild / tlBaseVersion := "0.0"
 
 ThisBuild / organization := "com.armanbilge"
-ThisBuild / publishGithubUser := "armanbilge"
-ThisBuild / publishFullName := "Arman Bilge"
+ThisBuild / organizationName := "Arman Bilge"
+ThisBuild / developers += tlGitHubDev("armanbilge", "Arman Bilge")
 ThisBuild / startYear := Some(2021)
 
-enablePlugins(SonatypeCiReleasePlugin)
-ThisBuild / spiewakCiReleaseSnapshots := true
-ThisBuild / spiewakMainBranches := Seq("main")
-ThisBuild / homepage := Some(url("https://github.com/armanbilge/van-cats"))
-ThisBuild / scmInfo := Some(
-  ScmInfo(
-    url("https://github.com/armanbilge/van-cats"),
-    "git@github.com:armanbilge/van-cats.git"))
-sonatypeCredentialHost := "s01.oss.sonatype.org"
+ThisBuild / tlUntaggedAreSnapshots := false
+ThisBuild / tlSonatypeUseLegacyHost := false
 
 val Scala3 = "3.1.0"
 ThisBuild / crossScalaVersions := Seq(Scala3)
-
-replaceCommandAlias(
-  "ci",
-  "; project /; headerCheckAll; scalafmtCheckAll; scalafmtSbtCheck; clean; testIfRelevant; mimaReportBinaryIssuesIfRelevant"
-)
-addCommandAlias("prePR", "; root/clean; +root/scalafmtAll; scalafmtSbt; +root/headerCreate")
 
 val CatsEffectVersion = "3.3.4"
 val Fs2Version = "3.2.4"
@@ -30,14 +17,9 @@ val Ip4sVersion = "3.1.2"
 val ScodecVersion = "2.1.0"
 val Specs2Version = "4.12.9"
 
-val commonSettings = Seq(
-  scalacOptions ++=
-    Seq("-new-syntax", "-indent", "-source:future"),
-  sonatypeCredentialHost := "s01.oss.sonatype.org"
-)
+ThisBuild / scalacOptions ++= Seq("-new-syntax", "-indent", "-source:future")
 
-lazy val root =
-  project.aggregate(core.jvm, core.js).enablePlugins(NoPublishPlugin)
+lazy val root = tlCrossRootProject.aggregate(core)
 
 lazy val core = crossProject(JVMPlatform, JSPlatform)
   .crossType(CrossType.Pure)
@@ -52,5 +34,4 @@ lazy val core = crossProject(JVMPlatform, JSPlatform)
       "org.typelevel" %%% "cats-effect-testing-specs2" % "1.3.0" % Test
     )
   )
-  .settings(commonSettings)
   .jsSettings(scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule)))
