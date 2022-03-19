@@ -11,7 +11,7 @@ ThisBuild / tlSonatypeUseLegacyHost := false
 val Scala3 = "3.1.1"
 ThisBuild / crossScalaVersions := Seq(Scala3)
 
-val CatsEffectVersion = "3.3.7"
+val CatsEffectVersion = "3.3.8"
 val Fs2Version = "3.2.5"
 val Ip4sVersion = "3.1.2"
 val ScodecVersion = "2.1.0"
