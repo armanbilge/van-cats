@@ -24,8 +24,8 @@ import cats.data.State
 private[vancats] val SplitMix64 = State[Long, Long] { _x =>
   var x = _x + 0x9e3779b97f4a7c15L
   var z = x
-  z = (z ^ (z >>> 30)) * 0xbf58476d1ce4e5b9L
-  z = (z ^ (z >>> 27)) * 0x94d049bb133111ebL
-  z = z ^ (z >>> 31);
+  z = (z ^ z >>> 30) * 0xbf58476d1ce4e5b9L
+  z = (z ^ z >>> 27) * 0x94d049bb133111ebL
+  z = z ^ z >>> 31;
   (x, z)
 }
